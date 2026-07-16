@@ -39,6 +39,13 @@ def test_format_status_empty_db():
     assert "no samples recorded yet" in text
 
 
+def test_format_status_includes_month_window():
+    latest = {"codex": {"month": {"ts": "2026-07-16T10:00:00Z", "used_percent": 24.0,
+                                  "resets_at": "2026-08-01T00:00:00Z", "error": None}}}
+    text = format_status(latest, loaded=True)
+    assert "codex month: 24.0% used" in text
+
+
 def test_render_plist_escapes_xml_special_characters():
     content = launchd.render_plist("/usr/bin/python3", "/repo/a&b", "/data/<x>")
     data = plistlib.loads(content.encode("utf-8"))

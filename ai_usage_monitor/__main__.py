@@ -12,7 +12,7 @@ def format_status(latest, loaded):
         lines.append("no samples recorded yet — run: python3 -m ai_usage_monitor sample")
         return "\n".join(lines)
     for provider in sorted(latest):
-        for window in ("5h", "7d"):
+        for window in ("5h", "7d", "month"):
             info = latest[provider].get(window)
             if info is None:
                 continue

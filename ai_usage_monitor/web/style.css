@@ -11,6 +11,7 @@
   --warning: #fab219;
   --series-5h: #2a78d6;
   --series-7d: #1baf7a;
+  --series-month: #eda100;
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -24,6 +25,7 @@
     --border: rgba(255, 255, 255, 0.10);
     --series-5h: #3987e5;
     --series-7d: #199e70;
+    --series-month: #c98500;
   }
 }
 

@@ -20,8 +20,8 @@ def test_index_references_only_existing_static_assets():
 def test_index_has_expected_dom_hooks():
     html = read("index.html")
     for element_id in ["range-picker", "stale-banner",
-                       "tile-claude-5h", "tile-claude-7d", "chart-claude",
-                       "tile-codex-5h", "tile-codex-7d", "chart-codex"]:
+                       "tiles-claude", "chart-claude",
+                       "tiles-codex", "chart-codex"]:
         assert 'id="%s"' % element_id in html, element_id
 
 
@@ -35,4 +35,5 @@ def test_style_declares_light_and_dark_series_colors():
     css = read("style.css")
     assert "#2a78d6" in css and "#1baf7a" in css          # light slots
     assert "#3987e5" in css and "#199e70" in css          # dark slots
+    assert "#eda100" in css and "#c98500" in css          # month slot
     assert "prefers-color-scheme: dark" in css

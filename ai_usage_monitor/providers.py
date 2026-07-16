@@ -65,9 +65,20 @@ def parse_claude(data):
 
 def parse_codex(data):
     limits = data.get("rate_limit") if isinstance(data, dict) else None
-    return _parse_windows("codex", limits,
-                          (("5h", "primary_window"), ("7d", "secondary_window")),
-                          "used_percent", "reset_at")
+    if isinstance(limits, dict):
+        return _parse_windows("codex", limits,
+                              (("5h", "primary_window"), ("7d", "secondary_window")),
+                              "used_percent", "reset_at")
+    spend = data.get("spend_control") if isinstance(data, dict) else None
+    limit = spend.get("individual_limit") if isinstance(spend, dict) else None
+    if isinstance(limit, dict) and _number(limit.get("used_percent")):
+        return [{
+            "provider": "codex", "window": "month",
+            "used_percent": float(limit["used_percent"]),
+            "resets_at": _reset_to_iso(limit.get("reset_at")),
+            "error": None,
+        }]
+    return error_rows("codex", "no rate_limit windows or spend_control in response")
 
 
 def _keychain_token():

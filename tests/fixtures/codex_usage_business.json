@@ -1,0 +1,35 @@
+{
+  "user_id": "user-XXXXXXXXXXXXXXXXXXXXXXXX",
+  "account_id": "00000000-0000-0000-0000-000000000000",
+  "email": "user@example.com",
+  "plan_type": "business",
+  "rate_limit": null,
+  "code_review_rate_limit": null,
+  "additional_rate_limits": null,
+  "credits": {
+    "has_credits": false,
+    "unlimited": false,
+    "overage_limit_reached": false,
+    "balance": null,
+    "approx_local_messages": null,
+    "approx_cloud_messages": null
+  },
+  "spend_control": {
+    "reached": false,
+    "individual_limit": {
+      "source": "group_based_spend_controls",
+      "limit": "6400",
+      "used": "1540.2085499763489",
+      "remaining": "4859.791450023651",
+      "used_percent": 24,
+      "remaining_percent": 76,
+      "reset_after_seconds": 1318700,
+      "reset_at": 1785542400
+    }
+  },
+  "rate_limit_reached_type": null,
+  "promo": null,
+  "rate_limit_reset_credits": {
+    "available_count": 0
+  }
+}

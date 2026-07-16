@@ -58,6 +58,20 @@ def test_parse_codex_missing_rate_limit_yields_two_error_rows():
     assert all(r["used_percent"] is None and r["error"] for r in rows)
 
 
+def test_parse_codex_business_plan_uses_spend_control_month_window():
+    rows = providers.parse_codex(load_fixture("codex_usage_business.json"))
+    assert rows == [
+        {"provider": "codex", "window": "month", "used_percent": 24.0,
+         "resets_at": "2026-08-01T00:00:00Z", "error": None},
+    ]
+
+
+def test_parse_codex_neither_shape_yields_error_rows():
+    rows = providers.parse_codex({"plan_type": "business", "rate_limit": None})
+    assert [r["window"] for r in rows] == ["5h", "7d"]
+    assert all(r["used_percent"] is None and r["error"] for r in rows)
+
+
 def test_error_rows_shape():
     rows = providers.error_rows("codex", "boom")
     assert rows == [

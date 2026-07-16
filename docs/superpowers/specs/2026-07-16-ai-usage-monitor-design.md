@@ -159,3 +159,11 @@ of the dashboard.
 - Notifications/alerts when nearing the cap
 - Multi-machine sync or remote access (server is localhost-only)
 - Packaging/distribution (runs from this checkout)
+
+## Addendum (2026-07-16, post-verification)
+
+Live verification found Codex business-plan accounts return `rate_limit: null`;
+their quota is `spend_control.individual_limit.used_percent` with an epoch
+`reset_at` (a monthly budget). The parser records this as window `"month"`,
+and the dashboard/status render whatever windows exist per provider instead of
+hardcoding 5h/7d. Consumer accounts keep the original two windows.

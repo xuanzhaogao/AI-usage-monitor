@@ -1,11 +1,25 @@
 "use strict";
 
-const SERIES = [
-  { window: "5h", label: "5-hour", cssVar: "--series-5h" },
-  { window: "7d", label: "7-day", cssVar: "--series-7d" },
-];
+const WINDOW_META = {
+  "5h": { label: "5-hour", cssVar: "--series-5h" },
+  "7d": { label: "7-day", cssVar: "--series-7d" },
+  month: { label: "Monthly", cssVar: "--series-month" },
+};
+const WINDOW_ORDER = Object.keys(WINDOW_META);
 const PROVIDERS = ["claude", "codex"];
 const REFRESH_MS = 60000;
+
+function windowsFor(provider, latest, history) {
+  const present = new Set([
+    ...Object.keys((latest.latest || {})[provider] || {}),
+    ...Object.keys((history || {})[provider] || {}),
+  ]);
+  return WINDOW_ORDER.filter((w) => present.has(w));
+}
+
+function windowMeta(w) {
+  return WINDOW_META[w] || { label: w, cssVar: "--series-5h" };
+}
 
 const charts = {};
 let currentHours = 24;
@@ -53,17 +67,17 @@ function renderTile(el, label, info) {
     `<div class="tile-sub">${sub}</div>`;
 }
 
-function buildAligned(providerHistory) {
+function buildAligned(providerHistory, windows) {
   const stamps = new Set();
-  for (const s of SERIES) {
-    for (const [ts] of providerHistory[s.window] || []) stamps.add(ts);
+  for (const w of windows) {
+    for (const [ts] of providerHistory[w] || []) stamps.add(ts);
   }
   const xs = Array.from(stamps).sort();
   const index = new Map(xs.map((ts, i) => [ts, i]));
   const data = [xs.map((ts) => Date.parse(ts) / 1000)];
-  for (const s of SERIES) {
+  for (const w of windows) {
     const ys = new Array(xs.length).fill(null);
-    for (const [ts, pct] of providerHistory[s.window] || []) {
+    for (const [ts, pct] of providerHistory[w] || []) {
       ys[index.get(ts)] = pct;
     }
     data.push(ys);
@@ -71,7 +85,7 @@ function buildAligned(providerHistory) {
   return data;
 }
 
-function makeChart(el, data) {
+function makeChart(el, data, windows) {
   const axisStyle = {
     stroke: cssColor("--muted"),
     grid: { stroke: cssColor("--grid"), width: 1 },
@@ -87,9 +101,9 @@ function makeChart(el, data) {
     ],
     series: [
       {},
-      ...SERIES.map((s) => ({
-        label: s.label,
-        stroke: cssColor(s.cssVar),
+      ...windows.map((w) => ({
+        label: windowMeta(w).label,
+        stroke: cssColor(windowMeta(w).cssVar),
         width: 2,
         spanGaps: false,
         points: { show: false },
@@ -100,16 +114,16 @@ function makeChart(el, data) {
   return new uPlot(opts, data, el);
 }
 
-function renderChart(provider, history) {
+function renderChart(provider, history, windows) {
   const el = document.getElementById("chart-" + provider);
-  const data = buildAligned(history[provider] || {});
+  const data = buildAligned(history[provider] || {}, windows);
   if (charts[provider]) {
     charts[provider].destroy();
     delete charts[provider];
   }
   el.textContent = "";
   if (data[0].length) {
-    charts[provider] = makeChart(el, data);
+    charts[provider] = makeChart(el, data, windows);
   } else {
     el.textContent = "no samples in this range";
   }
@@ -147,14 +161,21 @@ async function refresh() {
   }
   renderBanner(latest);
   for (const provider of PROVIDERS) {
-    for (const s of SERIES) {
-      renderTile(
-        document.getElementById(`tile-${provider}-${s.window}`),
-        s.label,
-        (latest.latest[provider] || {})[s.window],
-      );
+    const wins = windowsFor(provider, latest, hist.history);
+    const tiles = document.getElementById("tiles-" + provider);
+    tiles.textContent = "";
+    for (const w of wins) {
+      const tile = document.createElement("div");
+      tile.className = "tile";
+      tile.id = `tile-${provider}-${w}`;
+      tiles.appendChild(tile);
+      renderTile(tile, windowMeta(w).label, (latest.latest[provider] || {})[w]);
     }
-    renderChart(provider, hist.history);
+    if (wins.length === 0) {
+      tiles.innerHTML = '<div class="tile"><div class="tile-label">no data</div>' +
+        '<div class="tile-value">–</div><div class="tile-sub">no samples yet</div></div>';
+    }
+    renderChart(provider, hist.history, wins);
   }
 }
 
