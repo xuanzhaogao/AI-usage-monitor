@@ -133,10 +133,18 @@ function renderBanner(latest) {
 }
 
 async function refresh() {
-  const [latest, hist] = await Promise.all([
-    fetchJSON("/api/latest"),
-    fetchJSON("/api/history?hours=" + currentHours),
-  ]);
+  const banner = document.getElementById("stale-banner");
+  let latest, hist;
+  try {
+    [latest, hist] = await Promise.all([
+      fetchJSON("/api/latest"),
+      fetchJSON("/api/history?hours=" + currentHours),
+    ]);
+  } catch (err) {
+    banner.hidden = false;
+    banner.textContent = "⚠ Dashboard update failed: " + err.message;
+    return;
+  }
   renderBanner(latest);
   for (const provider of PROVIDERS) {
     for (const s of SERIES) {
