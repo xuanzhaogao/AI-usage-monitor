@@ -28,7 +28,10 @@ def _number(value):
 
 def _reset_to_iso(value):
     if _number(value):
-        return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, OverflowError, OSError):
+            return None
     if isinstance(value, str):
         return value
     return None

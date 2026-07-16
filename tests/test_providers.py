@@ -66,3 +66,14 @@ def test_error_rows_shape():
         {"provider": "codex", "window": "7d", "used_percent": None,
          "resets_at": None, "error": "boom"},
     ]
+
+
+def test_parse_codex_nan_reset_becomes_none_without_raising():
+    data = {"plan_type": "plus", "rate_limit": {
+        "primary_window": {"used_percent": 1.0, "reset_at": float("nan")},
+        "secondary_window": {"used_percent": 2.0, "reset_at": 1e20},
+    }}
+    rows = providers.parse_codex(data)
+    assert rows[0]["resets_at"] is None
+    assert rows[1]["resets_at"] is None
+    assert all(r["error"] is None for r in rows)
