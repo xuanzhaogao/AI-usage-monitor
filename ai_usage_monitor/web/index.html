@@ -1,5 +1,41 @@
 <!DOCTYPE html>
 <html lang="en">
-<head><meta charset="utf-8"><title>AI Usage Monitor</title></head>
-<body><p>AI Usage Monitor — dashboard arrives in the frontend task.</p></body>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Usage Monitor</title>
+<link rel="stylesheet" href="/static/uplot.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>AI Usage Monitor</h1>
+  <div id="range-picker" role="group" aria-label="Time range">
+    <button data-hours="24" class="active">24h</button>
+    <button data-hours="168">7d</button>
+    <button data-hours="720">30d</button>
+  </div>
+</header>
+<div id="stale-banner" hidden></div>
+<main>
+  <section class="provider">
+    <h2>Claude</h2>
+    <div class="tiles">
+      <div class="tile" id="tile-claude-5h"></div>
+      <div class="tile" id="tile-claude-7d"></div>
+    </div>
+    <div class="chart" id="chart-claude"></div>
+  </section>
+  <section class="provider">
+    <h2>Codex</h2>
+    <div class="tiles">
+      <div class="tile" id="tile-codex-5h"></div>
+      <div class="tile" id="tile-codex-7d"></div>
+    </div>
+    <div class="chart" id="chart-codex"></div>
+  </section>
+</main>
+<script src="/static/uplot.js"></script>
+<script src="/static/app.js"></script>
+</body>
 </html>
