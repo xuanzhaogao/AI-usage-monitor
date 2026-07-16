@@ -1,8 +1,9 @@
 # AI Usage Monitor
 
-Tracks how much of your Claude and Codex subscription rate limits (5-hour and
-7-day windows) you've used, sampled every 10 minutes, with a local web
-dashboard showing the history. macOS only; Python 3.9+ stdlib only.
+Tracks how much of your Claude and Codex subscription quotas you've used
+(5-hour and 7-day rate-limit windows, or the monthly spend budget on Codex
+business plans), sampled every 10 minutes, with a local web dashboard showing
+the history. macOS only; Python 3.9+ stdlib only.
 
 ## Quick start
 
@@ -20,7 +21,10 @@ python3 -m ai_usage_monitor serve --open
 python3 -m ai_usage_monitor install-agent
 ```
 
-Run everything from this repo's root directory.
+Run everything from this repo's root directory. `install-agent` records the
+current `python3` path and this repo's location in the launchd job — if you
+move the repo or your Python is upgraded/removed, re-run
+`python3 -m ai_usage_monitor install-agent`.
 
 ## How it works
 
