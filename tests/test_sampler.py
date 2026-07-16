@@ -144,3 +144,32 @@ def test_cli_sample_exit_code_zero_even_on_fetch_failure(monkeypatch, tmp_path, 
                         {"claude": lambda: providers.error_rows("claude", "down")})
     from ai_usage_monitor.__main__ import main
     assert main(["sample"]) == 0
+
+
+def test_read_claude_token_prefers_keychain(monkeypatch):
+    monkeypatch.setattr(providers, "_keychain_token", lambda: "kc-tok")
+    assert providers.read_claude_token() == "kc-tok"
+
+
+def test_read_claude_token_falls_back_to_credentials_file(monkeypatch, tmp_path):
+    creds = tmp_path / "credentials.json"
+    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "file-tok"}}))
+    monkeypatch.setattr(providers, "_keychain_token", lambda: None)
+    monkeypatch.setattr(providers, "CLAUDE_CREDENTIALS_PATH", str(creds))
+    assert providers.read_claude_token() == "file-tok"
+
+
+def test_read_claude_token_missing_everywhere_raises_specific_message(monkeypatch, tmp_path):
+    monkeypatch.setattr(providers, "_keychain_token", lambda: None)
+    monkeypatch.setattr(providers, "CLAUDE_CREDENTIALS_PATH", str(tmp_path / "absent.json"))
+    with pytest.raises(RuntimeError, match="is Claude Code logged in"):
+        providers.read_claude_token()
+
+
+def test_read_claude_token_file_without_token_raises_specific_message(monkeypatch, tmp_path):
+    creds = tmp_path / "credentials.json"
+    creds.write_text(json.dumps({"claudeAiOauth": {}}))
+    monkeypatch.setattr(providers, "_keychain_token", lambda: None)
+    monkeypatch.setattr(providers, "CLAUDE_CREDENTIALS_PATH", str(creds))
+    with pytest.raises(RuntimeError, match="no accessToken"):
+        providers.read_claude_token()
