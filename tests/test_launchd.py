@@ -37,3 +37,10 @@ def test_format_status_empty_db():
     text = format_status({}, loaded=False)
     assert "NOT loaded" in text
     assert "no samples recorded yet" in text
+
+
+def test_render_plist_escapes_xml_special_characters():
+    content = launchd.render_plist("/usr/bin/python3", "/repo/a&b", "/data/<x>")
+    data = plistlib.loads(content.encode("utf-8"))
+    assert data["WorkingDirectory"] == "/repo/a&b"
+    assert data["StandardOutPath"] == "/data/<x>/launchd.out.log"

@@ -2,6 +2,7 @@
 import os
 import subprocess
 import sys
+from xml.sax.saxutils import escape
 
 from . import db
 
@@ -13,6 +14,7 @@ def plist_path():
 
 
 def render_plist(python, repo_root, data_dir):
+    python, repo_root, data_dir = escape(python), escape(repo_root), escape(data_dir)
     return """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
