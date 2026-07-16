@@ -138,6 +138,67 @@ def test_read_codex_auth_reads_token_and_account_id(monkeypatch, tmp_path):
     assert providers.read_codex_auth() == ("tok", "acct")
 
 
+def month_rows():
+    return [{"provider": "codex", "window": "month", "used_percent": 24.0,
+             "resets_at": None, "error": None}]
+
+
+def test_error_rows_remap_to_last_known_windows(tmp_path):
+    db_path = str(tmp_path / "usage.db")
+    log_path = str(tmp_path / "sampler.log")
+    sampler.run_sample(fetchers={"codex": month_rows}, db_path=db_path, log_path=log_path)
+
+    def broken():
+        raise RuntimeError("blip")
+
+    sampler.run_sample(fetchers={"codex": broken}, db_path=db_path, log_path=log_path)
+    sampler.run_sample(fetchers={"codex": month_rows}, db_path=db_path, log_path=log_path)
+    conn = db.connect(db_path)
+    try:
+        latest = db.query_latest(conn)
+        windows = conn.execute(
+            "SELECT DISTINCT window FROM samples WHERE provider='codex'").fetchall()
+    finally:
+        conn.close()
+    assert list(latest["codex"].keys()) == ["month"]
+    assert latest["codex"]["month"]["used_percent"] == 24.0
+    assert windows == [("month",)]  # the blip cycle recorded a month gap, not 5h/7d
+
+
+def test_error_rows_keep_default_windows_without_history(tmp_path):
+    db_path = str(tmp_path / "usage.db")
+
+    def broken():
+        raise RuntimeError("first-ever sample fails")
+
+    sampler.run_sample(fetchers={"codex": broken}, db_path=db_path,
+                       log_path=str(tmp_path / "sampler.log"))
+    conn = db.connect(db_path)
+    try:
+        latest = db.query_latest(conn)
+    finally:
+        conn.close()
+    assert sorted(latest["codex"].keys()) == ["5h", "7d"]
+
+
+def test_partial_parse_errors_keep_their_window_names(tmp_path):
+    db_path = str(tmp_path / "usage.db")
+    log_path = str(tmp_path / "sampler.log")
+    sampler.run_sample(fetchers={"codex": month_rows}, db_path=db_path, log_path=log_path)
+    partial = [{"provider": "codex", "window": "5h", "used_percent": 1.0,
+                "resets_at": None, "error": None},
+               {"provider": "codex", "window": "7d", "used_percent": None,
+                "resets_at": None, "error": "missing window"}]
+    sampler.run_sample(fetchers={"codex": lambda: partial}, db_path=db_path, log_path=log_path)
+    conn = db.connect(db_path)
+    try:
+        latest = db.query_latest(conn)
+    finally:
+        conn.close()
+    assert latest["codex"]["5h"]["used_percent"] == 1.0
+    assert latest["codex"]["7d"]["error"] == "missing window"
+
+
 def test_cli_sample_exit_code_zero_even_on_fetch_failure(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("AI_USAGE_MONITOR_DIR", str(tmp_path))
     monkeypatch.setattr(providers, "FETCHERS",

@@ -62,7 +62,7 @@ function renderTile(el, label, info) {
     : info.error ? escapeHTML(info.error)
     : formatReset(info.resets_at);
   el.innerHTML =
-    `<div class="tile-label">${label}</div>` +
+    `<div class="tile-label">${escapeHTML(label)}</div>` +
     `<div class="tile-value">${value}</div>` +
     `<div class="tile-sub">${sub}</div>`;
 }
