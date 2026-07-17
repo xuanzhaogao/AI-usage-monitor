@@ -67,22 +67,35 @@ function renderTile(el, label, info) {
     `<div class="tile-sub">${sub}</div>`;
 }
 
-function buildAligned(providerHistory, windows) {
+function buildAligned(providerHistory, windows, latestInfo) {
   const stamps = new Set();
   for (const w of windows) {
     for (const [ts] of providerHistory[w] || []) stamps.add(ts);
   }
   const xs = Array.from(stamps).sort();
   const index = new Map(xs.map((ts, i) => [ts, i]));
-  const data = [xs.map((ts) => Date.parse(ts) / 1000)];
-  for (const w of windows) {
+  const xVals = xs.map((ts) => Date.parse(ts) / 1000);
+  const seriesYs = windows.map((w) => {
     const ys = new Array(xs.length).fill(null);
     for (const [ts, pct] of providerHistory[w] || []) {
       ys[index.get(ts)] = pct;
     }
-    data.push(ys);
+    return ys;
+  });
+  // Stepped(align:1) gives the newest sample zero drawn width, so without
+  // help the chart visually lags one sample and stops at the last tick.
+  // Extend each series whose most recent sample succeeded out to "now";
+  // series whose latest sample errored keep their honest gap.
+  const nowSec = Math.floor(Date.now() / 1000);
+  const extendY = windows.map((w) => {
+    const info = (latestInfo || {})[w];
+    return info && info.used_percent != null ? info.used_percent : null;
+  });
+  if (xVals.length && nowSec > xVals[xVals.length - 1] && extendY.some((y) => y != null)) {
+    xVals.push(nowSec);
+    seriesYs.forEach((ys, i) => ys.push(extendY[i]));
   }
-  return data;
+  return [xVals, ...seriesYs];
 }
 
 function makeChart(el, data, windows) {
@@ -114,9 +127,9 @@ function makeChart(el, data, windows) {
   return new uPlot(opts, data, el);
 }
 
-function renderChart(provider, history, windows) {
+function renderChart(provider, history, windows, latestInfo) {
   const el = document.getElementById("chart-" + provider);
-  const data = buildAligned(history[provider] || {}, windows);
+  const data = buildAligned(history[provider] || {}, windows, latestInfo);
   if (charts[provider]) {
     charts[provider].destroy();
     delete charts[provider];
@@ -175,7 +188,7 @@ async function refresh() {
       tiles.innerHTML = '<div class="tile"><div class="tile-label">no data</div>' +
         '<div class="tile-value">–</div><div class="tile-sub">no samples yet</div></div>';
     }
-    renderChart(provider, hist.history, wins);
+    renderChart(provider, hist.history, wins, latest.latest[provider] || {});
   }
 }
 
