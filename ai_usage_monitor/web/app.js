@@ -7,21 +7,37 @@ const WINDOW_META = {
 };
 const WINDOW_ORDER = Object.keys(WINDOW_META);
 const PROVIDERS = ["claude", "codex"];
+const PROVIDER_LABEL = { claude: "Claude", codex: "Codex" };
 const REFRESH_MS = 60000;
-
-function windowsFor(provider, latest, history) {
-  const present = new Set([
-    ...Object.keys((latest.latest || {})[provider] || {}),
-    ...Object.keys((history || {})[provider] || {}),
-  ]);
-  return WINDOW_ORDER.filter((w) => present.has(w));
-}
 
 function windowMeta(w) {
   return WINDOW_META[w] || { label: w, cssVar: "--series-5h" };
 }
 
-const charts = {};
+// Flat, fixed-order list of every (provider, window) series present in the
+// data — the combined chart draws one line per entry. Order is stable
+// (provider then window), so each series keeps its own color across refreshes
+// and range changes.
+function seriesList(latest, history) {
+  const out = [];
+  for (const provider of PROVIDERS) {
+    const latestWins = (latest.latest || {})[provider] || {};
+    const histWins = (history || {})[provider] || {};
+    for (const w of WINDOW_ORDER) {
+      if (w in latestWins || w in histWins) {
+        out.push({
+          provider: provider,
+          window: w,
+          label: PROVIDER_LABEL[provider] + " " + windowMeta(w).label,
+          cssVar: windowMeta(w).cssVar,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+let combinedChart = null;
 let currentHours = 24;
 
 function cssColor(name) {
@@ -67,17 +83,20 @@ function renderTile(el, label, info) {
     `<div class="tile-sub">${sub}</div>`;
 }
 
-function buildAligned(providerHistory, windows, latestInfo) {
+// Build the uPlot data matrix [xs, ...ySeries] by unioning the sample
+// timestamps of every series. Providers share one ts per sample cycle, so
+// their points align exactly on the shared x-axis.
+function buildAligned(history, series, latest) {
   const stamps = new Set();
-  for (const w of windows) {
-    for (const [ts] of providerHistory[w] || []) stamps.add(ts);
+  for (const s of series) {
+    for (const [ts] of (history[s.provider] || {})[s.window] || []) stamps.add(ts);
   }
   const xs = Array.from(stamps).sort();
   const index = new Map(xs.map((ts, i) => [ts, i]));
   const xVals = xs.map((ts) => Date.parse(ts) / 1000);
-  const seriesYs = windows.map((w) => {
+  const seriesYs = series.map((s) => {
     const ys = new Array(xs.length).fill(null);
-    for (const [ts, pct] of providerHistory[w] || []) {
+    for (const [ts, pct] of (history[s.provider] || {})[s.window] || []) {
       ys[index.get(ts)] = pct;
     }
     return ys;
@@ -87,8 +106,8 @@ function buildAligned(providerHistory, windows, latestInfo) {
   // Extend each series whose most recent sample succeeded out to "now";
   // series whose latest sample errored keep their honest gap.
   const nowSec = Math.floor(Date.now() / 1000);
-  const extendY = windows.map((w) => {
-    const info = (latestInfo || {})[w];
+  const extendY = series.map((s) => {
+    const info = ((latest.latest || {})[s.provider] || {})[s.window];
     return info && info.used_percent != null ? info.used_percent : null;
   });
   if (xVals.length && nowSec > xVals[xVals.length - 1] && extendY.some((y) => y != null)) {
@@ -98,7 +117,7 @@ function buildAligned(providerHistory, windows, latestInfo) {
   return [xVals, ...seriesYs];
 }
 
-function makeChart(el, data, windows) {
+function makeChart(el, data, series) {
   const axisStyle = {
     stroke: cssColor("--muted"),
     grid: { stroke: cssColor("--grid"), width: 1 },
@@ -106,7 +125,7 @@ function makeChart(el, data, windows) {
   };
   const opts = {
     width: el.clientWidth || 600,
-    height: 260,
+    height: 300,
     scales: { y: { range: [0, 100] } },
     axes: [
       { ...axisStyle },
@@ -114,9 +133,9 @@ function makeChart(el, data, windows) {
     ],
     series: [
       {},
-      ...windows.map((w) => ({
-        label: windowMeta(w).label,
-        stroke: cssColor(windowMeta(w).cssVar),
+      ...series.map((s) => ({
+        label: s.label,
+        stroke: cssColor(s.cssVar),
         width: 2,
         spanGaps: false,
         points: { show: false },
@@ -127,18 +146,35 @@ function makeChart(el, data, windows) {
   return new uPlot(opts, data, el);
 }
 
-function renderChart(provider, history, windows, latestInfo) {
-  const el = document.getElementById("chart-" + provider);
-  const data = buildAligned(history[provider] || {}, windows, latestInfo);
-  if (charts[provider]) {
-    charts[provider].destroy();
-    delete charts[provider];
+function renderChart(history, series, latest) {
+  const el = document.getElementById("chart-combined");
+  const data = buildAligned(history, series, latest);
+  if (combinedChart) {
+    combinedChart.destroy();
+    combinedChart = null;
   }
   el.textContent = "";
-  if (data[0].length) {
-    charts[provider] = makeChart(el, data, windows);
+  if (series.length && data[0].length) {
+    combinedChart = makeChart(el, data, series);
   } else {
     el.textContent = "no samples in this range";
+  }
+}
+
+function renderTiles(series, latest) {
+  const tiles = document.getElementById("tiles-all");
+  tiles.textContent = "";
+  if (series.length === 0) {
+    tiles.innerHTML = '<div class="tile"><div class="tile-label">no data</div>' +
+      '<div class="tile-value">–</div><div class="tile-sub">no samples yet</div></div>';
+    return;
+  }
+  for (const s of series) {
+    const tile = document.createElement("div");
+    tile.className = "tile";
+    tile.id = `tile-${s.provider}-${s.window}`;
+    tiles.appendChild(tile);
+    renderTile(tile, s.label, ((latest.latest || {})[s.provider] || {})[s.window]);
   }
 }
 
@@ -173,23 +209,9 @@ async function refresh() {
     return;
   }
   renderBanner(latest);
-  for (const provider of PROVIDERS) {
-    const wins = windowsFor(provider, latest, hist.history);
-    const tiles = document.getElementById("tiles-" + provider);
-    tiles.textContent = "";
-    for (const w of wins) {
-      const tile = document.createElement("div");
-      tile.className = "tile";
-      tile.id = `tile-${provider}-${w}`;
-      tiles.appendChild(tile);
-      renderTile(tile, windowMeta(w).label, (latest.latest[provider] || {})[w]);
-    }
-    if (wins.length === 0) {
-      tiles.innerHTML = '<div class="tile"><div class="tile-label">no data</div>' +
-        '<div class="tile-value">–</div><div class="tile-sub">no samples yet</div></div>';
-    }
-    renderChart(provider, hist.history, wins, latest.latest[provider] || {});
-  }
+  const series = seriesList(latest, hist.history);
+  renderTiles(series, latest);
+  renderChart(hist.history, series, latest);
 }
 
 document.getElementById("range-picker").addEventListener("click", (event) => {
@@ -203,14 +225,11 @@ document.getElementById("range-picker").addEventListener("click", (event) => {
 });
 
 window.addEventListener("resize", () => {
-  for (const provider of PROVIDERS) {
-    const chart = charts[provider];
-    if (chart) {
-      chart.setSize({
-        width: chart.root.parentElement.clientWidth || 600,
-        height: 260,
-      });
-    }
+  if (combinedChart) {
+    combinedChart.setSize({
+      width: combinedChart.root.parentElement.clientWidth || 600,
+      height: 300,
+    });
   }
 });
 

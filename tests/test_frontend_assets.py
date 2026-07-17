@@ -20,8 +20,7 @@ def test_index_references_only_existing_static_assets():
 def test_index_has_expected_dom_hooks():
     html = read("index.html")
     for element_id in ["range-picker", "stale-banner",
-                       "tiles-claude", "chart-claude",
-                       "tiles-codex", "chart-codex"]:
+                       "tiles-all", "chart-combined"]:
         assert 'id="%s"' % element_id in html, element_id
 
 
@@ -29,6 +28,13 @@ def test_app_js_uses_the_documented_api():
     js = read("app.js")
     assert "/api/latest" in js
     assert "/api/history?hours=" in js
+
+
+def test_app_js_qualifies_series_labels_by_provider():
+    js = read("app.js")
+    # Combined chart: legend/tiles must name the provider, not just the window.
+    assert "PROVIDER_LABEL" in js
+    assert '"Claude"' in js and '"Codex"' in js
 
 
 def test_style_declares_light_and_dark_series_colors():
