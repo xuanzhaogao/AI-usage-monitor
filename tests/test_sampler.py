@@ -234,3 +234,49 @@ def test_read_claude_token_file_without_token_raises_specific_message(monkeypatc
     monkeypatch.setattr(providers, "CLAUDE_CREDENTIALS_PATH", str(creds))
     with pytest.raises(RuntimeError, match="no accessToken"):
         providers.read_claude_token()
+
+
+def test_all_error_fetch_is_retried_once_after_delay(tmp_path, monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(sampler.time, "sleep", lambda s: sleeps.append(s))
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("dns not ready")
+        return ok_rows("claude")
+
+    rows = sampler.run_sample(fetchers={"claude": flaky},
+                              db_path=str(tmp_path / "usage.db"),
+                              log_path=str(tmp_path / "sampler.log"))
+    assert calls["n"] == 2
+    assert sleeps == [sampler.RETRY_DELAY_SECONDS]
+    assert all(r["error"] is None for r in rows)
+
+
+def test_successful_fetch_is_not_retried(tmp_path, monkeypatch):
+    monkeypatch.setattr(sampler.time, "sleep",
+                        lambda s: (_ for _ in ()).throw(AssertionError("no sleep expected")))
+    calls = {"n": 0}
+
+    def ok():
+        calls["n"] += 1
+        return ok_rows("claude")
+
+    sampler.run_sample(fetchers={"claude": ok},
+                       db_path=str(tmp_path / "usage.db"),
+                       log_path=str(tmp_path / "sampler.log"))
+    assert calls["n"] == 1
+
+
+def test_retry_that_also_fails_records_error_rows(tmp_path, monkeypatch):
+    monkeypatch.setattr(sampler.time, "sleep", lambda s: None)
+
+    def broken():
+        raise RuntimeError("still down")
+
+    rows = sampler.run_sample(fetchers={"claude": broken},
+                              db_path=str(tmp_path / "usage.db"),
+                              log_path=str(tmp_path / "sampler.log"))
+    assert all("still down" in r["error"] for r in rows)

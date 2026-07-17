@@ -1,5 +1,9 @@
 """One-shot sampler: fetch all providers, append one cycle of rows to the DB."""
+import time
+
 from . import db, providers
+
+RETRY_DELAY_SECONDS = 20
 
 
 def run_sample(fetchers=None, db_path=None, log_path=None, now=None):
@@ -14,16 +18,25 @@ def run_sample(fetchers=None, db_path=None, log_path=None, now=None):
     rows = []
     try:
         for provider, fetch in fetchers.items():
-            try:
-                provider_rows = fetch()
-            except Exception as exc:  # fetchers shouldn't raise; belt and braces
-                provider_rows = providers.error_rows(provider, str(exc) or type(exc).__name__)
+            provider_rows = _fetch_once(provider, fetch)
+            if all(r["error"] for r in provider_rows):
+                # launchd often ticks the instant the Mac wakes, before the
+                # network is back; one delayed retry absorbs those blips.
+                time.sleep(RETRY_DELAY_SECONDS)
+                provider_rows = _fetch_once(provider, fetch)
             rows.extend(_attribute_error_windows(conn, provider, provider_rows))
         db.insert_samples(conn, ts, rows)
     finally:
         conn.close()
     _log_errors(ts, rows, log_path)
     return rows
+
+
+def _fetch_once(provider, fetch):
+    try:
+        return fetch()
+    except Exception as exc:  # fetchers shouldn't raise; belt and braces
+        return providers.error_rows(provider, str(exc) or type(exc).__name__)
 
 
 def _attribute_error_windows(conn, provider, provider_rows):

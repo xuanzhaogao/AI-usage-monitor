@@ -34,8 +34,10 @@ move the repo or your Python is upgraded/removed, re-run
 - Data lives in `~/.ai-usage-monitor/` (`usage.db`, `sampler.log`); override
   with the `AI_USAGE_MONITOR_DIR` env var.
 - `serve` hosts the dashboard on `http://127.0.0.1:8377` (localhost only).
-- Tokens are read at sample time and never stored or logged. Fetch failures
-  are recorded as gaps, never fake zeros.
+- Tokens are read at sample time and never stored or logged. A failed fetch
+  is retried once after 20 s (launchd often ticks the moment the Mac wakes,
+  before Wi-Fi is back); persistent failures are recorded as gaps, never
+  fake zeros.
 - Codex business accounts have no 5h/7d windows; their monthly spend-control
   budget is tracked as a single "Monthly" series instead.
 
