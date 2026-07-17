@@ -26,6 +26,27 @@ current `python3` path and this repo's location in the launchd job — if you
 move the repo or your Python is upgraded/removed, re-run
 `python3 -m ai_usage_monitor install-agent`.
 
+## Menu-bar widget (optional)
+
+Show the quota percentages in the macOS menu bar via
+[SwiftBar](https://github.com/swiftbar/SwiftBar):
+
+```bash
+# 1. install SwiftBar and launch it once, then pick a plugin folder when asked
+brew install --cask swiftbar
+
+# 2. drop the plugin into that folder (baked with this repo's python + path)
+python3 -m ai_usage_monitor install-menubar
+```
+
+The menu bar shows each provider's most-used window (`C 14% · X 25%`, colored
+green/orange/red by severity, ⚠ when stale or erroring); the dropdown lists
+every window with reset countdowns and a link to the dashboard. SwiftBar
+refreshes it every 5 minutes by reading the local database — no network calls.
+`python3 -m ai_usage_monitor menubar` prints the raw output; remove the plugin
+with `uninstall-menubar`. Like `install-agent`, the plugin bakes in the current
+python path and repo location, so re-run `install-menubar` if either changes.
+
 ## How it works
 
 - `sample` fetches quota status from `api.anthropic.com/api/oauth/usage`

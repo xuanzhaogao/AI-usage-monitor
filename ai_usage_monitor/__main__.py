@@ -2,7 +2,7 @@
 import argparse
 import sys
 
-from . import db, launchd, sampler, server
+from . import db, launchd, menubar, sampler, server
 
 
 def format_status(latest, loaded):
@@ -39,6 +39,9 @@ def main(argv=None):
     sub.add_parser("install-agent", help="install the launchd agent (samples every 10 min)")
     sub.add_parser("uninstall-agent", help="unload and remove the launchd agent")
     sub.add_parser("status", help="print the latest readings and agent state")
+    sub.add_parser("menubar", help="print SwiftBar menu-bar plugin output")
+    sub.add_parser("install-menubar", help="install the SwiftBar menu-bar plugin")
+    sub.add_parser("uninstall-menubar", help="remove the SwiftBar menu-bar plugin")
     args = parser.parse_args(argv)
 
     if args.command == "sample":
@@ -59,6 +62,18 @@ def main(argv=None):
             conn.close()
         print(format_status(latest, launchd.agent_loaded()))
         return 0
+    if args.command == "menubar":
+        conn = db.connect()
+        try:
+            latest = db.query_latest(conn)
+        finally:
+            conn.close()
+        print(menubar.format_menubar(latest, menubar.newest_age_minutes(latest)))
+        return 0
+    if args.command == "install-menubar":
+        return menubar.install_menubar()
+    if args.command == "uninstall-menubar":
+        return menubar.uninstall_menubar()
     return 2
 
 
