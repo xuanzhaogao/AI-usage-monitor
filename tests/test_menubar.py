@@ -97,3 +97,20 @@ def test_render_menubar_plugin_wraps_the_command():
     assert script.startswith("#!/bin/sh")
     assert '"/repo/dir"' in script
     assert '"/usr/bin/python3" -m ai_usage_monitor menubar' in script
+
+
+def test_swiftbar_plugin_dir_reads_the_correct_domain(monkeypatch):
+    calls = {}
+
+    class Result:
+        stdout = "/Users/me/swiftbar\n"
+
+    def fake_run(cmd, **kwargs):
+        calls["cmd"] = cmd
+        return Result()
+
+    monkeypatch.setattr(menubar.subprocess, "run", fake_run)
+    assert menubar.swiftbar_plugin_dir() == "/Users/me/swiftbar"
+    # The SwiftBar bundle id is com.ameba.SwiftBar (not com.ambar).
+    assert calls["cmd"] == ["defaults", "read", "com.ameba.SwiftBar",
+                            "PluginDirectory"]

@@ -17,6 +17,7 @@ from . import db
 PLUGIN_NAME = "aiusage.5m.sh"
 DASHBOARD_URL = "http://127.0.0.1:8377"
 STALE_MINUTES = 30
+SWIFTBAR_DOMAIN = "com.ameba.SwiftBar"
 
 WINDOW_ORDER = ("5h", "7d", "month")
 WINDOW_LABEL = {"5h": "5-hour", "7d": "7-day", "month": "Monthly"}
@@ -168,7 +169,7 @@ def render_menubar_plugin(python, repo_root):
 def swiftbar_plugin_dir():
     """Return SwiftBar's configured plugin directory, or None if unset."""
     result = subprocess.run(
-        ["defaults", "read", "com.ambar.SwiftBar", "PluginDirectory"],
+        ["defaults", "read", SWIFTBAR_DOMAIN, "PluginDirectory"],
         capture_output=True, text=True)
     path = result.stdout.strip()
     return os.path.expanduser(path) if path else None
