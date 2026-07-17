@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timezone
 
 from ai_usage_monitor import menubar
@@ -97,6 +98,21 @@ def test_render_menubar_plugin_wraps_the_command():
     assert script.startswith("#!/bin/sh")
     assert '"/repo/dir"' in script
     assert '"/usr/bin/python3" -m ai_usage_monitor menubar' in script
+
+
+def test_install_replaces_stale_interval_variant(tmp_path, monkeypatch):
+    plugin_dir = tmp_path / "swiftbar"
+    plugin_dir.mkdir()
+    (plugin_dir / "aiusage.5m.sh").write_text("old 5-minute plugin")
+    monkeypatch.setattr(menubar, "swiftbar_plugin_dir", lambda: str(plugin_dir))
+    monkeypatch.setattr(menubar.subprocess, "run", lambda *a, **k: None)
+
+    assert menubar.install_menubar() == 0
+
+    remaining = sorted(p.name for p in plugin_dir.glob("aiusage.*.sh"))
+    assert remaining == [menubar.PLUGIN_NAME]  # only the new 1m plugin
+    assert menubar.PLUGIN_NAME == "aiusage.1m.sh"
+    assert os.access(str(plugin_dir / menubar.PLUGIN_NAME), os.X_OK)
 
 
 def test_swiftbar_plugin_dir_reads_the_correct_domain(monkeypatch):

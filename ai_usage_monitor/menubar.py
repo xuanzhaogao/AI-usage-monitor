@@ -7,6 +7,7 @@ the dropdown. ``| key=value`` suffixes style a line or attach an action.
 This module produces that text (pure ``format_menubar``) and installs a thin
 wrapper plugin that calls ``python3 -m ai_usage_monitor menubar``.
 """
+import glob
 import os
 import subprocess
 import sys
@@ -14,7 +15,10 @@ from datetime import datetime, timezone
 
 from . import db
 
-PLUGIN_NAME = "aiusage.5m.sh"
+PLUGIN_NAME = "aiusage.1m.sh"
+# Any interval variant we may have written before (aiusage.5m.sh, etc.); used
+# to clear stale copies so a changed refresh interval never leaves duplicates.
+PLUGIN_GLOB = "aiusage.*.sh"
 DASHBOARD_URL = "http://127.0.0.1:8377"
 STALE_MINUTES = 30
 SWIFTBAR_DOMAIN = "com.ameba.SwiftBar"
@@ -187,6 +191,10 @@ def install_menubar():
               file=sys.stderr)
         return 1
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Clear any prior interval variant (e.g. aiusage.5m.sh) so a changed
+    # refresh rate doesn't leave two plugins running side by side.
+    for stale in glob.glob(os.path.join(plugin_dir, PLUGIN_GLOB)):
+        os.remove(stale)
     path = os.path.join(plugin_dir, PLUGIN_NAME)
     with open(path, "w", encoding="utf-8") as f:
         f.write(render_menubar_plugin(sys.executable, repo_root))
@@ -203,12 +211,14 @@ def uninstall_menubar():
     if not plugin_dir:
         print("SwiftBar plugin directory not set; nothing to remove.")
         return 0
-    path = os.path.join(plugin_dir, PLUGIN_NAME)
-    if not os.path.exists(path):
-        print("Plugin not installed (no %s)." % path)
+    removed = glob.glob(os.path.join(plugin_dir, PLUGIN_GLOB))
+    for path in removed:
+        os.remove(path)
+    if not removed:
+        print("Plugin not installed (no %s)." % os.path.join(plugin_dir, PLUGIN_GLOB))
         return 0
-    os.remove(path)
     subprocess.run(["open", "-g", "swiftbar://refreshallplugins"],
                    capture_output=True)
-    print("Removed " + path)
+    for path in removed:
+        print("Removed " + path)
     return 0

@@ -42,7 +42,7 @@ python3 -m ai_usage_monitor install-menubar
 The menu bar shows each provider's most-used window (`C 14% · X 25%`, colored
 green/orange/red by severity, ⚠ when stale or erroring); the dropdown lists
 every window with reset countdowns and a link to the dashboard. SwiftBar
-refreshes it every 5 minutes by reading the local database — no network calls.
+refreshes it every minute by reading the local database — no network calls.
 `python3 -m ai_usage_monitor menubar` prints the raw output; remove the plugin
 with `uninstall-menubar`. Like `install-agent`, the plugin bakes in the current
 python path and repo location, so re-run `install-menubar` if either changes.
