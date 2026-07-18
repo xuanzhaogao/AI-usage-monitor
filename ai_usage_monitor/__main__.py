@@ -1,5 +1,6 @@
 """Command-line interface."""
 import argparse
+import os
 import sys
 
 from . import db, launchd, menubar, sampler, server
@@ -68,7 +69,9 @@ def main(argv=None):
             latest = db.query_latest(conn)
         finally:
             conn.close()
-        print(menubar.format_menubar(latest, menubar.newest_age_minutes(latest)))
+        print(menubar.format_menubar(
+            latest, menubar.newest_age_minutes(latest),
+            plugin_path=os.environ.get("SWIFTBAR_PLUGIN_PATH")))
         return 0
     if args.command == "install-menubar":
         return menubar.install_menubar()

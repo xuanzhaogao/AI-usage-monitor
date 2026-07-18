@@ -89,8 +89,13 @@ def newest_age_minutes(latest, now=None):
     return (now - newest).total_seconds() / 60
 
 
-def format_menubar(latest, age_minutes, now=None):
-    """Render the SwiftBar plugin output for one refresh."""
+def format_menubar(latest, age_minutes, now=None, plugin_path=None):
+    """Render the SwiftBar plugin output for one refresh.
+
+    When ``plugin_path`` is given (SwiftBar exposes it as
+    ``$SWIFTBAR_PLUGIN_PATH``), a "Refresh now" item is added that re-runs the
+    plugin with a ``sample`` argument to fetch fresh data on demand.
+    """
     now = now or datetime.now(timezone.utc)
     stale = age_minutes is None or age_minutes > STALE_MINUTES
     any_error = any(w.get("error") for prov in latest.values()
@@ -154,6 +159,9 @@ def format_menubar(latest, age_minutes, now=None):
     else:
         note = "Last sample %d min ago" % round(age_minutes)
         lines.append("%s | color=%s" % (note, COLOR_MUTED if stale else COLOR_OK))
+    if plugin_path:
+        lines.append('🔄 Refresh now | bash="%s" param1=sample terminal=false '
+                     "refresh=true" % plugin_path)
     lines.append("Open dashboard | href=%s" % DASHBOARD_URL)
     return "\n".join(lines)
 
@@ -165,8 +173,12 @@ def render_menubar_plugin(python, repo_root):
         "# <xbar.title>AI Usage Monitor</xbar.title>\n"
         "# <xbar.desc>Claude and Codex quota usage in the menu bar.</xbar.desc>\n"
         "# <xbar.dependencies>python3</xbar.dependencies>\n"
-        'cd "%s" || exit 1\n'
-        'exec "%s" -m ai_usage_monitor menubar\n' % (repo_root, python)
+        'cd "%(repo)s" || exit 1\n'
+        'if [ "$1" = "sample" ]; then\n'
+        '  exec "%(py)s" -m ai_usage_monitor sample\n'
+        "fi\n"
+        'exec "%(py)s" -m ai_usage_monitor menubar\n'
+        % {"repo": repo_root, "py": python}
     )
 
 

@@ -82,6 +82,22 @@ def test_dropdown_has_dashboard_link():
     assert "---" in out
 
 
+def test_refresh_button_runs_a_sample_via_the_plugin():
+    out = menubar.format_menubar(
+        healthy_latest(), age_minutes=5, now=NOW,
+        plugin_path="/Users/me/swiftbar/aiusage.1m.sh")
+    line = [ln for ln in out.splitlines() if "Refresh now" in ln][0]
+    assert 'bash="/Users/me/swiftbar/aiusage.1m.sh"' in line
+    assert "param1=sample" in line
+    assert "terminal=false" in line
+    assert "refresh=true" in line
+
+
+def test_no_refresh_button_without_plugin_path():
+    out = menubar.format_menubar(healthy_latest(), age_minutes=5, now=NOW)
+    assert "Refresh now" not in out
+
+
 def test_empty_latest_reports_no_samples():
     out = menubar.format_menubar({}, age_minutes=None, now=NOW)
     assert "no samples" in out.lower()
@@ -98,6 +114,14 @@ def test_render_menubar_plugin_wraps_the_command():
     assert script.startswith("#!/bin/sh")
     assert '"/repo/dir"' in script
     assert '"/usr/bin/python3" -m ai_usage_monitor menubar' in script
+
+
+def test_render_menubar_plugin_handles_sample_argument():
+    script = menubar.render_menubar_plugin("/usr/bin/python3", "/repo/dir")
+    # Invoked as `<plugin> sample`, the wrapper runs a fresh sample instead
+    # of printing the menu-bar output.
+    assert '"$1" = "sample"' in script
+    assert '"/usr/bin/python3" -m ai_usage_monitor sample' in script
 
 
 def test_install_replaces_stale_interval_variant(tmp_path, monkeypatch):
