@@ -1,5 +1,6 @@
 import json
 import pathlib
+from datetime import datetime, timezone
 
 from ai_usage_monitor import providers
 
@@ -80,6 +81,48 @@ def test_error_rows_shape():
         {"provider": "codex", "window": "7d", "used_percent": None,
          "resets_at": None, "error": "boom"},
     ]
+
+
+def test_is_auth_rejection_matches_the_codes_the_api_uses_to_refuse_us():
+    assert providers.is_auth_rejection("HTTP Error 401: Unauthorized")
+    assert providers.is_auth_rejection("HTTP Error 403: Forbidden")
+    assert providers.is_auth_rejection("HTTP Error 429: Too Many Requests")
+
+
+def test_is_auth_rejection_ignores_transient_failures():
+    assert not providers.is_auth_rejection("HTTP Error 503: Service Unavailable")
+    assert not providers.is_auth_rejection("<urlopen error timed out>")
+    assert not providers.is_auth_rejection(None)
+
+
+def test_is_expired_credentials_matches_the_local_expiry_error():
+    assert providers.is_expired_credentials(providers.expired_credentials_error("claude"))
+    assert not providers.is_expired_credentials("HTTP Error 401: Unauthorized")
+    assert not providers.is_expired_credentials(None)
+
+
+def test_expired_credentials_error_names_the_tool_that_refreshes_the_token():
+    assert "Claude Code" in providers.expired_credentials_error("claude")
+    assert "Codex" in providers.expired_credentials_error("codex")
+
+
+KEYCHAIN_DUMP = '''keychain: "/Users/x/Library/Keychains/login.keychain-db"
+class: "genp"
+attributes:
+    0x00000007 <blob>="Claude Code-credentials"
+    "cdat"<timedate>=0x32303236303430373139353733325A00  "20260407195732Z\\000"
+    "mdat"<timedate>=0x32303236303830333134343732345A00  "20260803144724Z\\000"
+    "svce"<blob>="Claude Code-credentials"
+'''
+
+
+def test_parse_keychain_mdat_reads_the_item_modification_time():
+    assert providers._parse_keychain_mdat(KEYCHAIN_DUMP) == datetime(
+        2026, 8, 3, 14, 47, 24, tzinfo=timezone.utc)
+
+
+def test_parse_keychain_mdat_returns_none_without_a_modification_date():
+    assert providers._parse_keychain_mdat('class: "genp"\n') is None
 
 
 def test_parse_codex_nan_reset_becomes_none_without_raising():

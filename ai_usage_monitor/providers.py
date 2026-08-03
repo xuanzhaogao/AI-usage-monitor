@@ -1,17 +1,53 @@
 """Fetch and parse quota usage from Claude and Codex."""
+import base64
 import json
 import os
+import re
 import subprocess
+import time
 import urllib.request
 from datetime import datetime, timezone
 
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+KEYCHAIN_SERVICE = "Claude Code-credentials"
 CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
 CODEX_AUTH_PATH = os.path.expanduser("~/.codex/auth.json")
 USER_AGENT = "ai-usage-monitor/0.1"
 REQUEST_TIMEOUT_SECONDS = 15
 WINDOWS = ("5h", "7d")
+
+# Both CLIs hold short-lived OAuth access tokens and refresh them only while
+# they run, so a machine left alone overnight leaves us an expired token. A
+# request with one earns a 401, and enough of those earn a 429 instead — so
+# check the expiry we already have and don't send the request at all.
+EXPIRY_SKEW_SECONDS = 60
+EXPIRED_CREDENTIALS_PREFIX = "credentials expired"
+REFRESHED_BY = {"claude": "start Claude Code", "codex": "run Codex"}
+AUTH_REJECTION_CODES = (401, 403, 429)
+
+
+def expired_credentials_error(provider):
+    return "%s — %s to refresh the token" % (
+        EXPIRED_CREDENTIALS_PREFIX, REFRESHED_BY.get(provider, "sign in again"))
+
+
+def is_expired_credentials(message):
+    """True for our own pre-flight expiry error (no request was made)."""
+    return bool(message) and message.startswith(EXPIRED_CREDENTIALS_PREFIX)
+
+
+def is_auth_rejection(message):
+    """True when the API refused our credentials, or throttled us for asking
+    with bad ones too often. Neither improves by retrying soon."""
+    return bool(message) and any("HTTP Error %d" % code in message
+                                 for code in AUTH_REJECTION_CODES)
+
+
+def _is_expired(expires_at, now=None):
+    if expires_at is None:  # unknown expiry: let the request decide
+        return False
+    return expires_at <= (now if now is not None else time.time()) + EXPIRY_SKEW_SECONDS
 
 
 def error_rows(provider, message):
@@ -81,36 +117,109 @@ def parse_codex(data):
     return error_rows("codex", "no rate_limit windows or spend_control in response")
 
 
-def _keychain_token():
-    """Return the Claude OAuth token from the macOS Keychain, or None."""
+def _security(*args):
+    """Run `security` against the Claude credentials item; None on any failure."""
     try:
         out = subprocess.run(
-            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE] + list(args),
             capture_output=True, text=True, timeout=5,
         )
-        if out.returncode != 0:
-            return None
-        return json.loads(out.stdout).get("claudeAiOauth", {}).get("accessToken")
+        return out.stdout if out.returncode == 0 else None
     except Exception:
         return None
 
 
-def read_claude_token():
-    token = _keychain_token()
-    if token:
-        return token
-    if not os.path.exists(CLAUDE_CREDENTIALS_PATH):
-        raise RuntimeError(
-            "no Claude credentials in keychain or ~/.claude/.credentials.json"
-            " — is Claude Code logged in?")
-    with open(CLAUDE_CREDENTIALS_PATH, encoding="utf-8") as f:
-        token = json.load(f).get("claudeAiOauth", {}).get("accessToken")
-    if not token:
-        raise RuntimeError("no accessToken in ~/.claude/.credentials.json")
-    return token
+def _keychain_oauth():
+    """Return the Claude OAuth blob from the macOS Keychain, or None."""
+    out = _security("-w")
+    try:
+        return json.loads(out).get("claudeAiOauth") or None
+    except Exception:
+        return None
+
+
+def _keychain_attributes():
+    """Return the keychain item's attribute dump (no password), or None."""
+    return _security()
+
+
+def _parse_keychain_mdat(text):
+    """Read the item's modification time, which moves on every token write."""
+    match = re.search(r'"mdat"<timedate>=[^\n]*?"(\d{14})Z', text or "")
+    if not match:
+        return None
+    return datetime.strptime(match.group(1), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+
+
+def _file_changed_at(path):
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
+    except OSError:
+        return None
+
+
+def _claude_changed_at():
+    return (_parse_keychain_mdat(_keychain_attributes())
+            or _file_changed_at(CLAUDE_CREDENTIALS_PATH))
+
+
+def _codex_changed_at():
+    try:
+        with open(CODEX_AUTH_PATH, encoding="utf-8") as f:
+            stamp = json.load(f).get("last_refresh")
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except Exception:
+        return _file_changed_at(CODEX_AUTH_PATH)
+
+
+CREDENTIAL_CLOCKS = {"claude": _claude_changed_at, "codex": _codex_changed_at}
+
+
+def credentials_changed_at(provider):
+    """When this provider's stored credentials last changed, or None.
+
+    Lets a caller tell "the same rejected token" from "signed in again", so a
+    fresh login doesn't have to wait out a backoff window.
+    """
+    clock = CREDENTIAL_CLOCKS.get(provider)
+    return clock() if clock else None
+
+
+def _millis_to_epoch(value):
+    return value / 1000.0 if _number(value) else None
+
+
+def read_claude_credentials():
+    """Return {'token', 'expires_at'} for Claude; expires_at may be None."""
+    oauth = _keychain_oauth()
+    if not (oauth and oauth.get("accessToken")):
+        if not os.path.exists(CLAUDE_CREDENTIALS_PATH):
+            raise RuntimeError(
+                "no Claude credentials in keychain or ~/.claude/.credentials.json"
+                " — is Claude Code logged in?")
+        with open(CLAUDE_CREDENTIALS_PATH, encoding="utf-8") as f:
+            oauth = json.load(f).get("claudeAiOauth") or {}
+        if not oauth.get("accessToken"):
+            raise RuntimeError("no accessToken in ~/.claude/.credentials.json")
+    return {"token": oauth["accessToken"],
+            "expires_at": _millis_to_epoch(oauth.get("expiresAt"))}
+
+
+def _jwt_expiry(token):
+    """Return the 'exp' claim of a JWT access token, or None if it isn't one."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    try:
+        payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        exp = json.loads(base64.urlsafe_b64decode(payload)).get("exp")
+    except Exception:
+        return None
+    return exp if _number(exp) else None
 
 
 def read_codex_auth():
+    """Return {'token', 'account_id', 'expires_at'} for Codex."""
     if not os.path.exists(CODEX_AUTH_PATH):
         raise RuntimeError("Codex auth.json not found — is Codex CLI logged in?")
     with open(CODEX_AUTH_PATH, encoding="utf-8") as f:
@@ -118,7 +227,8 @@ def read_codex_auth():
     token = tokens.get("access_token")
     if not token:
         raise RuntimeError("no access_token in ~/.codex/auth.json")
-    return token, tokens.get("account_id")
+    return {"token": token, "account_id": tokens.get("account_id"),
+            "expires_at": _jwt_expiry(token)}
 
 
 def _get_json(url, headers):
@@ -129,10 +239,12 @@ def _get_json(url, headers):
 
 def fetch_claude():
     try:
-        token = read_claude_token()
+        creds = read_claude_credentials()
+        if _is_expired(creds["expires_at"]):
+            return error_rows("claude", expired_credentials_error("claude"))
         data = _get_json(CLAUDE_USAGE_URL, {
             "Accept": "application/json",
-            "Authorization": "Bearer " + token,
+            "Authorization": "Bearer " + creds["token"],
             "anthropic-beta": "oauth-2025-04-20",
             "User-Agent": USER_AGENT,
         })
@@ -143,14 +255,16 @@ def fetch_claude():
 
 def fetch_codex():
     try:
-        token, account_id = read_codex_auth()
+        auth = read_codex_auth()
+        if _is_expired(auth["expires_at"]):
+            return error_rows("codex", expired_credentials_error("codex"))
         headers = {
             "Accept": "application/json",
-            "Authorization": "Bearer " + token,
+            "Authorization": "Bearer " + auth["token"],
             "User-Agent": USER_AGENT,
         }
-        if account_id:
-            headers["ChatGPT-Account-Id"] = account_id
+        if auth["account_id"]:
+            headers["ChatGPT-Account-Id"] = auth["account_id"]
         data = _get_json(CODEX_USAGE_URL, headers)
         return parse_codex(data)
     except Exception as exc:

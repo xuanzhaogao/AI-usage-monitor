@@ -61,6 +61,12 @@ python path and repo location, so re-run `install-menubar` if either changes.
   is retried once after 20 s (launchd often ticks the moment the Mac wakes,
   before Wi-Fi is back); persistent failures are recorded as gaps, never
   fake zeros.
+- Both CLIs refresh their short-lived OAuth tokens only while they run, so a
+  quiet day can leave an expired one behind. Sampling checks the recorded
+  expiry first and records `credentials expired` instead of sending a request
+  that can only fail — and if the API does reject or throttle us (401/403/429)
+  it stops asking for 30 minutes rather than turning 401s into 429s. Start the
+  CLI again and the next sample recovers on its own.
 - Codex business accounts have no 5h/7d windows; their monthly spend-control
   budget is tracked as a single "Monthly" series instead.
 

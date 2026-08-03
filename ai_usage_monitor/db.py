@@ -15,6 +15,14 @@ CREATE TABLE IF NOT EXISTS samples (
   error        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_samples ON samples (provider, window, ts);
+-- One row per provider recording the last cycle that actually called the API.
+-- Cycles skipped by a backoff still write samples, so sample timestamps can't
+-- tell us when we last asked.
+CREATE TABLE IF NOT EXISTS attempts (
+  provider TEXT PRIMARY KEY,
+  ts       TEXT NOT NULL,
+  error    TEXT
+);
 """
 
 
@@ -51,6 +59,22 @@ def insert_samples(conn, ts, rows):
          for r in rows],
     )
     conn.commit()
+
+
+def record_attempt(conn, provider, ts, error):
+    """Remember when we last called this provider's API, and how it went."""
+    conn.execute(
+        "INSERT INTO attempts (provider, ts, error) VALUES (?, ?, ?)"
+        " ON CONFLICT(provider) DO UPDATE SET ts = excluded.ts, error = excluded.error",
+        (provider, ts, error))
+    conn.commit()
+
+
+def last_attempt(conn, provider):
+    """Return (ts, error) of the last real fetch, or None if never attempted."""
+    row = conn.execute("SELECT ts, error FROM attempts WHERE provider = ?",
+                       (provider,)).fetchone()
+    return (row[0], row[1]) if row else None
 
 
 def query_history(conn, hours, now=None):

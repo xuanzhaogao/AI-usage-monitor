@@ -75,6 +75,18 @@ def test_latest_empty_db_returns_empty_dict(conn):
     assert db.query_latest(conn) == {}
 
 
+def test_last_attempt_is_none_before_any_fetch(conn):
+    assert db.last_attempt(conn, "claude") is None
+
+
+def test_record_attempt_keeps_only_the_newest_per_provider(conn):
+    db.record_attempt(conn, "claude", "2026-08-03T12:00:00Z", "HTTP Error 401: Unauthorized")
+    db.record_attempt(conn, "codex", "2026-08-03T12:00:00Z", None)
+    db.record_attempt(conn, "claude", "2026-08-03T12:30:00Z", None)
+    assert db.last_attempt(conn, "claude") == ("2026-08-03T12:30:00Z", None)
+    assert db.last_attempt(conn, "codex") == ("2026-08-03T12:00:00Z", None)
+
+
 def test_data_dir_honors_env_override(tmp_path, monkeypatch):
     monkeypatch.setenv("AI_USAGE_MONITOR_DIR", str(tmp_path / "custom"))
     assert db.data_dir() == str(tmp_path / "custom")
