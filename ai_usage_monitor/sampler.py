@@ -55,16 +55,19 @@ def _cycle_error(provider_rows):
 
 
 def _backoff_error(conn, provider, ts):
-    """Return the recent auth rejection to re-record instead of fetching.
+    """Return the recent credential failure to re-record instead of fetching.
 
     Measured from the last real attempt, so the window still expires while
-    skipped cycles keep recording. Two exemptions keep recovery prompt:
-    expired credentials (they cost no request and clear when the CLI refreshes
-    its token), and credentials that changed after the rejection — a fresh
-    login shouldn't have to wait out the window.
+    skipped cycles keep recording. Expired credentials are in scope because
+    reaching that error now means a refresh grant was tried and refused;
+    repeating it every cycle is the escalation this backoff exists to stop.
+
+    Credentials that changed after the failure are exempt, which keeps
+    recovery prompt: a refreshed token — ours or the CLI's — and a fresh
+    login both rewrite the store, and neither should wait out the window.
     """
     attempt = db.last_attempt(conn, provider)
-    if not (attempt and providers.is_auth_rejection(attempt[1])):
+    if not (attempt and _hopeless(attempt[1])):
         return None
     if _minutes_between(attempt[0], ts) >= AUTH_BACKOFF_MINUTES:
         return None

@@ -276,18 +276,34 @@ def test_cli_sample_exit_code_zero_even_on_fetch_failure(monkeypatch, tmp_path, 
 
 def test_read_claude_credentials_prefers_keychain(monkeypatch):
     monkeypatch.setattr(providers, "_keychain_oauth",
-                        lambda: {"accessToken": "kc-tok", "expiresAt": 1786000000000})
-    assert providers.read_claude_credentials() == {"token": "kc-tok",
-                                                  "expires_at": 1786000000.0}
+                        lambda: {"accessToken": "kc-tok", "expiresAt": 1786000000000,
+                                 "refreshToken": "kc-refresh"})
+    creds = providers.read_claude_credentials()
+    assert creds["token"] == "kc-tok"
+    assert creds["expires_at"] == 1786000000.0
+    assert creds["refresh_token"] == "kc-refresh"
+    assert creds["in_keychain"]
 
 
 def test_read_claude_credentials_falls_back_to_credentials_file(monkeypatch, tmp_path):
-    creds = tmp_path / "credentials.json"
-    creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "file-tok"}}))
+    creds_file = tmp_path / "credentials.json"
+    creds_file.write_text(json.dumps({"claudeAiOauth": {"accessToken": "file-tok"}}))
     monkeypatch.setattr(providers, "_keychain_oauth", lambda: None)
-    monkeypatch.setattr(providers, "CLAUDE_CREDENTIALS_PATH", str(creds))
-    assert providers.read_claude_credentials() == {"token": "file-tok",
-                                                  "expires_at": None}
+    monkeypatch.setattr(providers, "CLAUDE_CREDENTIALS_PATH", str(creds_file))
+    creds = providers.read_claude_credentials()
+    assert creds["token"] == "file-tok"
+    assert creds["expires_at"] is None
+    # not in_keychain: we have nowhere to put a rotated refresh token, so the
+    # refresh is skipped rather than risk losing it
+    assert not creds["in_keychain"]
+
+
+def test_refresh_is_skipped_for_file_stored_credentials(monkeypatch):
+    monkeypatch.setattr(providers, "_post_json", lambda url, payload: pytest.fail(
+        "must not rotate a refresh token we cannot store"))
+    creds = {"token": "file-tok", "expires_at": None, "refresh_token": "r",
+             "refresh_expires_at": None, "in_keychain": False, "oauth": {}}
+    assert providers.refresh_claude_credentials(creds) is None
 
 
 def test_read_claude_credentials_missing_everywhere_raises_specific_message(
@@ -521,13 +537,33 @@ def test_codex_credentials_changed_at_falls_back_to_the_file_mtime(monkeypatch, 
     assert abs((changed - datetime.now(timezone.utc)).total_seconds()) < 60
 
 
-def test_expired_credentials_do_not_skip_the_next_cycle(tmp_path):
-    """Expired tokens cost no API call, and refresh out of band — retry freely."""
+def test_expired_credentials_skip_the_next_cycle(tmp_path, monkeypatch):
+    """An expiry now costs a refresh grant, so a failing one must not repeat
+    every 10 minutes — that is the 401-into-429 escalation we already fixed."""
     db_path, log_path = str(tmp_path / "usage.db"), str(tmp_path / "sampler.log")
     start = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(providers, "credentials_changed_at", lambda provider: None)
     expired = providers.error_rows("claude", providers.expired_credentials_error("claude"))
     sampler.run_sample(fetchers={"claude": lambda: expired}, db_path=db_path,
                        log_path=log_path, now=start)
+    fetch, calls = counting_fetcher(ok_rows("claude"))
+    sampler.run_sample(fetchers={"claude": fetch}, db_path=db_path, log_path=log_path,
+                       now=start + timedelta(minutes=10))
+    assert calls["n"] == 0
+
+
+def test_expired_credentials_retry_as_soon_as_the_token_is_rewritten(
+        tmp_path, monkeypatch):
+    """A successful refresh — ours or Claude Code's — moves the keychain's
+    modification time, which releases the backoff immediately."""
+    db_path, log_path = str(tmp_path / "usage.db"), str(tmp_path / "sampler.log")
+    start = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(providers, "credentials_changed_at", lambda provider: None)
+    expired = providers.error_rows("claude", providers.expired_credentials_error("claude"))
+    sampler.run_sample(fetchers={"claude": lambda: expired}, db_path=db_path,
+                       log_path=log_path, now=start)
+    monkeypatch.setattr(providers, "credentials_changed_at",
+                        lambda provider: start + timedelta(minutes=5))
     fetch, calls = counting_fetcher(ok_rows("claude"))
     sampler.run_sample(fetchers={"claude": fetch}, db_path=db_path, log_path=log_path,
                        now=start + timedelta(minutes=10))

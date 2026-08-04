@@ -1,6 +1,9 @@
 import json
 import pathlib
+import time
 from datetime import datetime, timezone
+
+import pytest
 
 from ai_usage_monitor import providers
 
@@ -110,6 +113,7 @@ KEYCHAIN_DUMP = '''keychain: "/Users/x/Library/Keychains/login.keychain-db"
 class: "genp"
 attributes:
     0x00000007 <blob>="Claude Code-credentials"
+    "acct"<blob>="xgao"
     "cdat"<timedate>=0x32303236303430373139353733325A00  "20260407195732Z\\000"
     "mdat"<timedate>=0x32303236303830333134343732345A00  "20260803144724Z\\000"
     "svce"<blob>="Claude Code-credentials"
@@ -134,3 +138,151 @@ def test_parse_codex_nan_reset_becomes_none_without_raising():
     assert rows[0]["resets_at"] is None
     assert rows[1]["resets_at"] is None
     assert all(r["error"] is None for r in rows)
+
+
+def test_parse_keychain_account_reads_the_item_account():
+    assert providers._parse_keychain_account(KEYCHAIN_DUMP) == "xgao"
+
+
+def test_parse_keychain_account_returns_none_without_an_account():
+    assert providers._parse_keychain_account('class: "genp"\n') is None
+
+
+# Anchored to the real clock: the refresh tests pin `now` explicitly, but
+# fetch_claude reads it, and it must see a live refresh token behind the
+# expired access token.
+NOW = time.time()
+HOUR_MS = 3_600_000
+
+
+def stored_oauth(expires_at=None, refresh_expires_at=None):
+    """A keychain blob shaped like Claude Code's, with an expired access token."""
+    return {
+        "accessToken": "old-access",
+        "refreshToken": "old-refresh",
+        "expiresAt": expires_at if expires_at is not None else int(NOW * 1000) - HOUR_MS,
+        "refreshTokenExpiresAt": (refresh_expires_at if refresh_expires_at is not None
+                                  else int(NOW * 1000) + 30 * 24 * HOUR_MS),
+        "subscriptionType": "team",
+        "scopes": ["user:inference"],
+    }
+
+
+def refreshing(monkeypatch, oauth, response=None, raises=None):
+    """Wire up a fake keychain + token endpoint; return the recorded calls."""
+    calls = {"posted": [], "stored": []}
+
+    def fake_post(url, payload):
+        calls["posted"].append((url, payload))
+        if raises is not None:
+            raise raises
+        return response
+
+    monkeypatch.setattr(providers, "_keychain_oauth", lambda: dict(oauth))
+    monkeypatch.setattr(providers, "_post_json", fake_post)
+    monkeypatch.setattr(providers, "_store_keychain_oauth",
+                        lambda blob: calls["stored"].append(blob) or True)
+    return calls
+
+
+def test_refresh_swaps_in_the_new_token_and_stores_the_rotated_blob(monkeypatch):
+    calls = refreshing(monkeypatch, stored_oauth(), response={
+        "access_token": "new-access", "refresh_token": "new-refresh",
+        "expires_in": 28800,
+    })
+
+    creds = providers.refresh_claude_credentials(
+        providers.read_claude_credentials(), now=NOW)
+
+    assert creds["token"] == "new-access"
+    assert creds["expires_at"] == NOW + 28800
+    url, payload = calls["posted"][0]
+    assert url == providers.CLAUDE_TOKEN_URL
+    assert payload == {"grant_type": "refresh_token",
+                       "refresh_token": "old-refresh",
+                       "client_id": providers.CLAUDE_CLIENT_ID}
+    stored = calls["stored"][-1]
+    assert stored["accessToken"] == "new-access"
+    assert stored["refreshToken"] == "new-refresh"
+    assert stored["expiresAt"] == int((NOW + 28800) * 1000)
+
+
+def test_refresh_preserves_fields_it_does_not_own(monkeypatch):
+    calls = refreshing(monkeypatch, stored_oauth(), response={
+        "access_token": "new-access", "expires_in": 28800})
+
+    providers.refresh_claude_credentials(
+        providers.read_claude_credentials(), now=NOW)
+
+    stored = calls["stored"][-1]
+    assert stored["subscriptionType"] == "team"
+    assert stored["scopes"] == ["user:inference"]
+    # a response without refresh_token means the old one is still valid
+    assert stored["refreshToken"] == "old-refresh"
+
+
+def test_refresh_declines_when_the_refresh_token_itself_has_expired(monkeypatch):
+    calls = refreshing(monkeypatch,
+                       stored_oauth(refresh_expires_at=int(NOW * 1000) - HOUR_MS),
+                       response={"access_token": "new-access", "expires_in": 28800})
+
+    assert providers.refresh_claude_credentials(
+        providers.read_claude_credentials(), now=NOW) is None
+    assert calls["posted"] == []  # a doomed request is still a 401 we don't need
+
+
+def test_refresh_declines_when_the_endpoint_fails(monkeypatch):
+    refreshing(monkeypatch, stored_oauth(), raises=RuntimeError("HTTP Error 400"))
+
+    assert providers.refresh_claude_credentials(
+        providers.read_claude_credentials(), now=NOW) is None
+
+
+def test_refresh_declines_when_the_keychain_will_not_take_a_write(monkeypatch):
+    """Rotating a refresh token we then can't store logs Claude Code out."""
+    calls = refreshing(monkeypatch, stored_oauth(), response={
+        "access_token": "new-access", "expires_in": 28800})
+    monkeypatch.setattr(providers, "_store_keychain_oauth", lambda blob: False)
+
+    assert providers.refresh_claude_credentials(
+        providers.read_claude_credentials(), now=NOW) is None
+    assert calls["posted"] == []
+
+
+def test_refresh_probes_the_keychain_before_rotating_anything(monkeypatch):
+    calls = refreshing(monkeypatch, stored_oauth(), response={
+        "access_token": "new-access", "expires_in": 28800})
+
+    providers.refresh_claude_credentials(
+        providers.read_claude_credentials(), now=NOW)
+
+    # the probe writes the blob back unchanged, then the rotation overwrites it
+    assert calls["stored"][0]["accessToken"] == "old-access"
+    assert calls["stored"][-1]["accessToken"] == "new-access"
+
+
+def test_fetch_claude_refreshes_an_expired_token_instead_of_erroring(monkeypatch):
+    refreshing(monkeypatch, stored_oauth(), response={
+        "access_token": "new-access", "expires_in": 28800})
+    seen = {}
+
+    def fake_get(url, headers):
+        seen["auth"] = headers["Authorization"]
+        return load_fixture("claude_usage.json")
+
+    monkeypatch.setattr(providers, "_get_json", fake_get)
+
+    rows = providers.fetch_claude()
+
+    assert seen["auth"] == "Bearer new-access"
+    assert all(r["error"] is None for r in rows)
+
+
+def test_fetch_claude_still_reports_expiry_when_the_refresh_fails(monkeypatch):
+    refreshing(monkeypatch, stored_oauth(), raises=RuntimeError("HTTP Error 400"))
+    monkeypatch.setattr(providers, "_get_json", lambda url, headers: pytest.fail(
+        "must not ask the usage API with a token we know is expired"))
+
+    rows = providers.fetch_claude()
+
+    assert all(providers.is_expired_credentials(r["error"]) for r in rows)

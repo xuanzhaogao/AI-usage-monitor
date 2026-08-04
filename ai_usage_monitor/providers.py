@@ -9,6 +9,9 @@ import urllib.request
 from datetime import datetime, timezone
 
 CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+CLAUDE_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
+# Claude Code's own public OAuth client; the refresh grant is issued to it.
+CLAUDE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 KEYCHAIN_SERVICE = "Claude Code-credentials"
 CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 CLAUDE_CREDENTIALS_PATH = os.path.expanduser("~/.claude/.credentials.json")
@@ -21,6 +24,8 @@ WINDOWS = ("5h", "7d")
 # they run, so a machine left alone overnight leaves us an expired token. A
 # request with one earns a 401, and enough of those earn a 429 instead — so
 # check the expiry we already have and don't send the request at all.
+# For Claude we can do better than reporting it: the keychain also holds a
+# refresh token, so we renew it ourselves (see refresh_claude_credentials).
 EXPIRY_SKEW_SECONDS = 60
 EXPIRED_CREDENTIALS_PREFIX = "credentials expired"
 REFRESHED_BY = {"claude": "start Claude Code", "codex": "run Codex"}
@@ -117,11 +122,11 @@ def parse_codex(data):
     return error_rows("codex", "no rate_limit windows or spend_control in response")
 
 
-def _security(*args):
+def _security(subcommand, *args):
     """Run `security` against the Claude credentials item; None on any failure."""
     try:
         out = subprocess.run(
-            ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE] + list(args),
+            ["security", subcommand, "-s", KEYCHAIN_SERVICE] + list(args),
             capture_output=True, text=True, timeout=5,
         )
         return out.stdout if out.returncode == 0 else None
@@ -131,7 +136,7 @@ def _security(*args):
 
 def _keychain_oauth():
     """Return the Claude OAuth blob from the macOS Keychain, or None."""
-    out = _security("-w")
+    out = _security("find-generic-password", "-w")
     try:
         return json.loads(out).get("claudeAiOauth") or None
     except Exception:
@@ -140,7 +145,28 @@ def _keychain_oauth():
 
 def _keychain_attributes():
     """Return the keychain item's attribute dump (no password), or None."""
-    return _security()
+    return _security("find-generic-password")
+
+
+def _parse_keychain_account(text):
+    """Read the item's account attribute, needed to update it in place."""
+    match = re.search(r'"acct"<blob>="([^"]*)"', text or "")
+    return match.group(1) if match else None
+
+
+def _store_keychain_oauth(oauth):
+    """Write the blob back to the same keychain item. True when it stuck.
+
+    `-U` updates the existing item in place rather than adding a second one,
+    which needs the account it was created under — read it back rather than
+    assume, since a wrong account would silently create a rival item.
+    """
+    account = _parse_keychain_account(_keychain_attributes())
+    if not account:
+        return False
+    secret = json.dumps({"claudeAiOauth": oauth})
+    return _security("add-generic-password", "-U", "-a", account,
+                     "-w", secret) is not None
 
 
 def _parse_keychain_mdat(text):
@@ -190,9 +216,14 @@ def _millis_to_epoch(value):
 
 
 def read_claude_credentials():
-    """Return {'token', 'expires_at'} for Claude; expires_at may be None."""
+    """Return Claude's stored credentials; expires_at may be None.
+
+    Carries the whole stored blob so a refresh can put back the fields it
+    doesn't own (subscription type, scopes) untouched.
+    """
     oauth = _keychain_oauth()
-    if not (oauth and oauth.get("accessToken")):
+    stored_in_keychain = bool(oauth and oauth.get("accessToken"))
+    if not stored_in_keychain:
         if not os.path.exists(CLAUDE_CREDENTIALS_PATH):
             raise RuntimeError(
                 "no Claude credentials in keychain or ~/.claude/.credentials.json"
@@ -202,7 +233,53 @@ def read_claude_credentials():
         if not oauth.get("accessToken"):
             raise RuntimeError("no accessToken in ~/.claude/.credentials.json")
     return {"token": oauth["accessToken"],
-            "expires_at": _millis_to_epoch(oauth.get("expiresAt"))}
+            "expires_at": _millis_to_epoch(oauth.get("expiresAt")),
+            "refresh_token": oauth.get("refreshToken"),
+            "refresh_expires_at": _millis_to_epoch(oauth.get("refreshTokenExpiresAt")),
+            "in_keychain": stored_in_keychain,
+            "oauth": oauth}
+
+
+def refresh_claude_credentials(creds, now=None):
+    """Trade Claude's refresh token for a fresh access token, or None.
+
+    Claude Code only refreshes while it is running, so an idle machine leaves
+    us holding a dead token; doing the refresh grant ourselves keeps sampling
+    going overnight. The grant rotates the refresh token, so the new blob goes
+    back to the keychain straight away — a rotation we stored nowhere would
+    log Claude Code out.
+
+    Returns None (caller reports the expiry as before) when there is nothing
+    to refresh with or the endpoint refuses.
+    """
+    now = time.time() if now is None else now
+    if not creds.get("refresh_token") or not creds.get("in_keychain"):
+        return None
+    if _is_expired(creds["refresh_expires_at"], now):
+        return None  # a doomed grant is just another 401 against our quota
+    if not _store_keychain_oauth(creds["oauth"]):
+        # The grant rotates the refresh token, so a store we can't write to is
+        # a logged-out Claude Code. Prove the write works while it's still a
+        # no-op, and leave the credentials alone if it doesn't.
+        return None
+    try:
+        granted = _post_json(CLAUDE_TOKEN_URL, {
+            "grant_type": "refresh_token",
+            "refresh_token": creds["refresh_token"],
+            "client_id": CLAUDE_CLIENT_ID,
+        })
+        token = granted["access_token"]
+    except Exception:
+        return None
+    expires_at = now + granted.get("expires_in", 0)
+    oauth = dict(creds["oauth"])
+    oauth["accessToken"] = token
+    oauth["expiresAt"] = int(expires_at * 1000)
+    if granted.get("refresh_token"):
+        oauth["refreshToken"] = granted["refresh_token"]
+    _store_keychain_oauth(oauth)  # rotation already happened; use it regardless
+    return dict(creds, token=token, expires_at=expires_at, oauth=oauth,
+                refresh_token=oauth.get("refreshToken"))
 
 
 def _jwt_expiry(token):
@@ -237,9 +314,21 @@ def _get_json(url, headers):
         return json.loads(response.read().decode("utf-8"))
 
 
+def _post_json(url, payload):
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), method="POST",
+        headers={"Accept": "application/json",
+                 "Content-Type": "application/json",
+                 "User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def fetch_claude():
     try:
         creds = read_claude_credentials()
+        if _is_expired(creds["expires_at"]):
+            creds = refresh_claude_credentials(creds) or creds
         if _is_expired(creds["expires_at"]):
             return error_rows("claude", expired_credentials_error("claude"))
         data = _get_json(CLAUDE_USAGE_URL, {
