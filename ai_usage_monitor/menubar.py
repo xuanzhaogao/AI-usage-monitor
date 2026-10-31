@@ -28,14 +28,19 @@ WINDOW_LABEL = {"5h": "5-hour", "7d": "7-day", "month": "Monthly"}
 PROVIDER_ORDER = ("claude", "codex")
 PROVIDER_LABEL = {"claude": "Claude", "codex": "Codex"}
 
+# Informational lines are tinted (light-mode color, dark-mode color) to set
+# them apart from the clickable items, which keep the system text color.
+INFO_COLOR = "#2b5d9b,#8ab4f8"
+
+
 def _info(text):
-    """An informational dropdown line in the normal text color.
+    """An informational dropdown line, tinted INFO_COLOR.
 
     SwiftBar (2.0.x) disables items without an action and macOS greys those
     out whatever their color=, so give it a harmless one: clicking just
     re-runs the plugin.
     """
-    return "%s | refresh=true" % text
+    return "%s | color=%s refresh=true" % (text, INFO_COLOR)
 
 
 def _parse_iso(iso):

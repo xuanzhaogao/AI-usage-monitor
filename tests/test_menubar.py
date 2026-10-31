@@ -117,7 +117,7 @@ def test_running_local_model_shows_model_memory_and_stop():
     out = menubar.format_menubar(
         healthy_latest(), age_minutes=5, now=NOW, plugin_path=PLUGIN,
         local=local("running", REPO_8BIT, memory_gb=38.2, proxy=True))
-    assert "Local model: ● running · MLX-8bit · 38 GB | refresh=true" in out.splitlines()
+    assert "Local model: ● running · MLX-8bit · 38 GB | color=#2b5d9b,#8ab4f8 refresh=true" in out.splitlines()
     stop = [ln for ln in out.splitlines() if "Stop local model" in ln][0]
     assert 'bash="%s" param1=local-model param2=stop' % PLUGIN in stop
     assert "refresh=true" in stop
@@ -130,7 +130,7 @@ def test_running_without_proxy_is_flagged():
     out = menubar.format_menubar(
         healthy_latest(), age_minutes=5, now=NOW, plugin_path=PLUGIN,
         local=local("running", REPO_8BIT, proxy=False))
-    assert "Local model: ● running · MLX-8bit · ⚠ proxy down | refresh=true" \
+    assert "Local model: ● running · MLX-8bit · ⚠ proxy down | color=#2b5d9b,#8ab4f8 refresh=true" \
         in out.splitlines()
 
 
@@ -146,7 +146,7 @@ def test_stopped_local_model_offers_each_downloaded_model():
     out = menubar.format_menubar(healthy_latest(), age_minutes=5, now=NOW,
                                  plugin_path=PLUGIN, local=local())
     lines = out.splitlines()
-    assert "Local model: ○ stopped | refresh=true" in lines
+    assert "Local model: ○ stopped | color=#2b5d9b,#8ab4f8 refresh=true" in lines
     start = lines.index("▶ Start local model")
     assert lines[start + 1].startswith("--MLX-6bit | ")
     assert "param2=start param3=%s" % REPO_6BIT in lines[start + 1]
@@ -243,7 +243,8 @@ def test_swiftbar_plugin_dir_reads_the_correct_domain(monkeypatch):
 
 def test_informational_dropdown_lines_are_not_greyed_out():
     # SwiftBar disables (greys out) lines without an action, so informational
-    # lines get a harmless refresh action; nothing sets a color.
+    # lines get a harmless refresh action plus their own tint; clickable
+    # items keep the system text color.
     out = menubar.format_menubar(
         healthy_latest(), age_minutes=5, now=NOW, plugin_path=PLUGIN,
         local=local("running", REPO_8BIT, memory_gb=38.2, proxy=True))
@@ -252,5 +253,7 @@ def test_informational_dropdown_lines_are_not_greyed_out():
                  "Codex Monthly: 25% · resets in 14d 4h",
                  "Local model: ● running · MLX-8bit · 38 GB",
                  "Last sample 5 min ago"):
-        assert "%s | refresh=true" % text in lines
-    assert "color=" not in out
+        assert "%s | color=#2b5d9b,#8ab4f8 refresh=true" % text in lines
+    for ln in lines:
+        if "bash=" in ln or "href=" in ln:
+            assert "color=" not in ln
