@@ -13,7 +13,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
-from . import db
+from . import db, localmodel
 
 PLUGIN_NAME = "aiusage.1m.sh"
 # Any interval variant we may have written before (aiusage.5m.sh, etc.); used
@@ -27,23 +27,15 @@ WINDOW_ORDER = ("5h", "7d", "month")
 WINDOW_LABEL = {"5h": "5-hour", "7d": "7-day", "month": "Monthly"}
 PROVIDER_ORDER = ("claude", "codex")
 PROVIDER_LABEL = {"claude": "Claude", "codex": "Codex"}
-PROVIDER_SHORT = {"claude": "C", "codex": "X"}
 
-# Status palette (matches the dashboard's reserved status colors).
-COLOR_OK = "#0ca30c"
-COLOR_WARN = "#eda100"
-COLOR_CRIT = "#d03b3b"
-COLOR_MUTED = "#898781"
+def _info(text):
+    """An informational dropdown line in the normal text color.
 
-
-def _severity_color(pct):
-    if pct is None:
-        return COLOR_MUTED
-    if pct >= 80:
-        return COLOR_CRIT
-    if pct >= 50:
-        return COLOR_WARN
-    return COLOR_OK
+    SwiftBar (2.0.x) disables items without an action and macOS greys those
+    out whatever their color=, so give it a harmless one: clicking just
+    re-runs the plugin.
+    """
+    return "%s | refresh=true" % text
 
 
 def _parse_iso(iso):
@@ -89,51 +81,73 @@ def newest_age_minutes(latest, now=None):
     return (now - newest).total_seconds() / 60
 
 
-def format_menubar(latest, age_minutes, now=None, plugin_path=None):
+def _window_percent(latest, provider, window):
+    info = latest.get(provider, {}).get(window)
+    return info.get("used_percent") if info else None
+
+
+def _local_model_lines(local, plugin_path):
+    """Dropdown lines for the local model: state, plus Start/Stop when clickable."""
+    status, models = local["status"], local["models"]
+    state = status["state"]
+    details = [{"running": "● running", "starting": "◐ starting",
+                "stopped": "○ stopped"}[state]]
+    if status.get("model"):
+        details.append(localmodel.short_name(status["model"]))
+    if status.get("memory_gb") is not None:
+        details.append("%.0f GB" % status["memory_gb"])
+    if state == "running" and not status.get("proxy"):
+        details.append("⚠ proxy down")
+    lines = [_info("Local model: " + " · ".join(details))]
+    if not plugin_path:
+        return lines
+    action = 'bash="%s" param1=local-model %%s terminal=false refresh=true' % plugin_path
+    if state == "stopped":
+        lines.append("▶ Start local model")
+        if not models:
+            lines.append("--" + _info("No downloaded models"))
+        for repo in models:
+            lines.append("--%s | %s" % (localmodel.short_name(repo),
+                                        action % ("param2=start param3=" + repo)))
+    else:
+        lines.append("⏹ Stop local model | " + action % "param2=stop")
+    return lines
+
+
+def format_menubar(latest, age_minutes, now=None, plugin_path=None, local=None):
     """Render the SwiftBar plugin output for one refresh.
 
     When ``plugin_path`` is given (SwiftBar exposes it as
     ``$SWIFTBAR_PLUGIN_PATH``), a "Refresh now" item is added that re-runs the
     plugin with a ``sample`` argument to fetch fresh data on demand.
+    ``local`` ({"status": localmodel.status(), "models": [...]}) adds the
+    local-model section; its Start/Stop items also need ``plugin_path``.
     """
     now = now or datetime.now(timezone.utc)
     stale = age_minutes is None or age_minutes > STALE_MINUTES
     any_error = any(w.get("error") for prov in latest.values()
                     for w in prov.values())
 
-    # Menu-bar headline: each present provider's worst (binding) window.
-    parts = []
-    worst_overall = None
-    for provider in PROVIDER_ORDER:
-        windows = latest.get(provider)
-        if not windows:
-            continue
-        pct = _worst_percent(windows)
-        parts.append("%s %s" % (PROVIDER_SHORT[provider],
-                                "%d%%" % round(pct) if pct is not None else "?"))
-        if pct is not None:
-            worst_overall = pct if worst_overall is None else max(worst_overall, pct)
+    # Menu-bar headline: "C·<Claude 5h>-<Claude 7d> X·<Codex's worst
+    # (binding) window>". Nothing is colored; SwiftBar's default text color
+    # follows light/dark mode.
+    def number(pct):
+        return "%d" % round(pct) if pct is not None else "?"
 
-    if not parts:
+    if not latest:
         headline = "AI usage: no samples"
     else:
-        headline = " · ".join(parts)
+        headline = "C·%s-%s X·%s" % (
+            number(_window_percent(latest, "claude", "5h")),
+            number(_window_percent(latest, "claude", "7d")),
+            number(_worst_percent(latest.get("codex", {}))))
     if stale or any_error:
         headline = "⚠ " + headline
 
-    if stale:
-        color = COLOR_MUTED
-    elif worst_overall is not None and worst_overall >= 80:
-        color = COLOR_CRIT
-    elif (worst_overall is not None and worst_overall >= 50) or any_error:
-        color = COLOR_WARN
-    else:
-        color = COLOR_OK
-
-    lines = ["%s | color=%s" % (headline, color), "---"]
+    lines = [headline, "---"]
 
     if not latest:
-        lines.append("No samples yet — run: python3 -m ai_usage_monitor sample")
+        lines.append(_info("No samples yet — run: python3 -m ai_usage_monitor sample"))
     else:
         for provider in PROVIDER_ORDER:
             windows = latest.get(provider)
@@ -145,20 +159,21 @@ def format_menubar(latest, age_minutes, now=None, plugin_path=None):
                     continue
                 name = "%s %s" % (PROVIDER_LABEL[provider], WINDOW_LABEL[window])
                 if info.get("error"):
-                    lines.append("%s: ⚠ %s | color=%s" % (name, info["error"], COLOR_CRIT))
+                    lines.append(_info("%s: ⚠ %s" % (name, info["error"])))
                 else:
-                    pct = info["used_percent"]
-                    lines.append("%s: %d%% · resets %s | color=%s"
-                                 % (name, round(pct),
-                                    _humanize_reset(info.get("resets_at"), now),
-                                    _severity_color(pct)))
+                    lines.append(_info("%s: %d%% · resets %s"
+                                       % (name, round(info["used_percent"]),
+                                          _humanize_reset(info.get("resets_at"), now))))
+
+    if local is not None:
+        lines.append("---")
+        lines.extend(_local_model_lines(local, plugin_path))
 
     lines.append("---")
     if age_minutes is None:
-        lines.append("No samples recorded | color=%s" % COLOR_MUTED)
+        lines.append(_info("No samples recorded"))
     else:
-        note = "Last sample %d min ago" % round(age_minutes)
-        lines.append("%s | color=%s" % (note, COLOR_MUTED if stale else COLOR_OK))
+        lines.append(_info("Last sample %d min ago" % round(age_minutes)))
     if plugin_path:
         lines.append('🔄 Refresh now | bash="%s" param1=sample terminal=false '
                      "refresh=true" % plugin_path)
@@ -166,19 +181,26 @@ def format_menubar(latest, age_minutes, now=None, plugin_path=None):
     return "\n".join(lines)
 
 
-def render_menubar_plugin(python, repo_root):
+def render_menubar_plugin(python, repo_root, local_model_dir=None):
     """Return the SwiftBar wrapper script that calls the menubar subcommand."""
+    local = ""
+    if local_model_dir:
+        local = 'export %s="%s"\n' % (localmodel.ENV_DIR, local_model_dir)
     return (
         "#!/bin/sh\n"
         "# <xbar.title>AI Usage Monitor</xbar.title>\n"
         "# <xbar.desc>Claude and Codex quota usage in the menu bar.</xbar.desc>\n"
         "# <xbar.dependencies>python3</xbar.dependencies>\n"
         'cd "%(repo)s" || exit 1\n'
+        "%(local)s"
         'if [ "$1" = "sample" ]; then\n'
         '  exec "%(py)s" -m ai_usage_monitor sample\n'
         "fi\n"
+        'if [ "$1" = "local-model" ]; then\n'
+        '  exec "%(py)s" -m ai_usage_monitor "$@"\n'
+        "fi\n"
         'exec "%(py)s" -m ai_usage_monitor menubar\n'
-        % {"repo": repo_root, "py": python}
+        % {"repo": repo_root, "py": python, "local": local}
     )
 
 
@@ -191,7 +213,12 @@ def swiftbar_plugin_dir():
     return os.path.expanduser(path) if path else None
 
 
-def install_menubar():
+def install_menubar(local_model_dir=None):
+    if local_model_dir:
+        local_model_dir = os.path.abspath(os.path.expanduser(local_model_dir))
+        if not os.path.isfile(os.path.join(local_model_dir, "start.sh")):
+            print("No start.sh in %s." % local_model_dir, file=sys.stderr)
+            return 1
     plugin_dir = swiftbar_plugin_dir()
     if not plugin_dir:
         print("SwiftBar plugin directory not set. Install SwiftBar "
@@ -209,7 +236,7 @@ def install_menubar():
         os.remove(stale)
     path = os.path.join(plugin_dir, PLUGIN_NAME)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(render_menubar_plugin(sys.executable, repo_root))
+        f.write(render_menubar_plugin(sys.executable, repo_root, local_model_dir))
     os.chmod(path, 0o755)
     subprocess.run(["open", "-g", "swiftbar://refreshallplugins"],
                    capture_output=True)

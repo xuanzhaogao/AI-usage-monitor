@@ -39,12 +39,25 @@ brew install --cask swiftbar
 python3 -m ai_usage_monitor install-menubar
 ```
 
-The menu bar shows each provider's most-used window (`C 14% · X 25%`, colored
-green/orange/red by severity, ⚠ when stale or erroring); the dropdown lists
+The menu bar shows three percentages — Claude 5-hour · Claude 7-day · Codex's
+most-used window (`C·11-14 X·25`, `?` for a missing one; ⚠ when stale or
+erroring); the dropdown lists
 every window with reset countdowns, a "🔄 Refresh now" item that fetches a
 fresh sample on demand, and a link to the dashboard. SwiftBar refreshes the
 display every minute by reading the local database — no network calls except
 when you click Refresh now.
+To also control a local MLX model from the dropdown, pass the directory holding
+its `start.sh`/`stop.sh` (`start.sh` must accept a `MODEL=<hf repo id>` env var):
+
+```bash
+python3 -m ai_usage_monitor install-menubar --local-model-dir ~/project/qwen3.8
+```
+
+The dropdown then shows the model server's state (running / starting /
+stopped), which model it serves, its memory footprint and whether the LiteLLM
+proxy is up, with "⏹ Stop local model" while it runs and a "▶ Start local
+model" submenu listing the fully downloaded `Qwen3.8-27B` builds in the
+Hugging Face cache when it doesn't.
 `python3 -m ai_usage_monitor menubar` prints the raw output; remove the plugin
 with `uninstall-menubar`. Like `install-agent`, the plugin bakes in the current
 python path and repo location, so re-run `install-menubar` if either changes.

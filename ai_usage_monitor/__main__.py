@@ -3,7 +3,7 @@ import argparse
 import os
 import sys
 
-from . import db, launchd, menubar, sampler, server
+from . import db, launchd, localmodel, menubar, sampler, server
 
 
 def format_status(latest, loaded):
@@ -41,8 +41,17 @@ def main(argv=None):
     sub.add_parser("uninstall-agent", help="unload and remove the launchd agent")
     sub.add_parser("status", help="print the latest readings and agent state")
     sub.add_parser("menubar", help="print SwiftBar menu-bar plugin output")
-    sub.add_parser("install-menubar", help="install the SwiftBar menu-bar plugin")
+    p_install_menubar = sub.add_parser("install-menubar",
+                                       help="install the SwiftBar menu-bar plugin")
+    p_install_menubar.add_argument(
+        "--local-model-dir", metavar="DIR",
+        help="directory with the local model's start.sh/stop.sh; adds a "
+             "local-model status and Start/Stop section to the dropdown")
     sub.add_parser("uninstall-menubar", help="remove the SwiftBar menu-bar plugin")
+    p_local = sub.add_parser("local-model", help="start or stop the local model "
+                             "(needs %s)" % localmodel.ENV_DIR)
+    p_local.add_argument("action", choices=("start", "stop", "status"))
+    p_local.add_argument("model", nargs="?", help="HF repo id to start (default: start.sh's)")
     args = parser.parse_args(argv)
 
     if args.command == "sample":
@@ -69,12 +78,24 @@ def main(argv=None):
             latest = db.query_latest(conn)
         finally:
             conn.close()
+        local = None
+        if localmodel.model_dir():
+            local = {"status": localmodel.status(),
+                     "models": localmodel.available_models()}
         print(menubar.format_menubar(
             latest, menubar.newest_age_minutes(latest),
-            plugin_path=os.environ.get("SWIFTBAR_PLUGIN_PATH")))
+            plugin_path=os.environ.get("SWIFTBAR_PLUGIN_PATH"), local=local))
         return 0
     if args.command == "install-menubar":
-        return menubar.install_menubar()
+        return menubar.install_menubar(args.local_model_dir)
+    if args.command == "local-model":
+        if args.action == "start":
+            return localmodel.start(args.model)
+        if args.action == "stop":
+            return localmodel.stop()
+        print(localmodel.status())
+        print("downloaded: %s" % ", ".join(localmodel.available_models()))
+        return 0
     if args.command == "uninstall-menubar":
         return menubar.uninstall_menubar()
     return 2
